@@ -15,8 +15,12 @@ from models import build_model
 import matplotlib.pyplot as plt
 from sklearn.manifold import Isomap
 from PIL import Image
+import argparse
 
 # # Load satellite images
+parser = argparse.ArgumentParser()
+parser.add_argument('--eval-n', type=int, default=0, help="앞 n개만 평가, 0이면 전체 평가")
+args = parser.parse_args()
 
 # In[31]:
 
@@ -35,6 +39,13 @@ satellite_dataloader= DataLoader(satellite_dataset,batch_size=batch_size)
 
 gt=np.loadtxt(os.path.join(root_dir,"gt_matches.csv"),delimiter=',',dtype=str)[1:,:]
 
+if args.eval_n and args.eval_n > 0:
+    max_n = min(args.eval_n, len(uav_images), gt.shape[0])
+    uav_images = uav_images[:max_n]
+    gt = gt[:max_n, :]
+    print(f"[Eval] 앞에서 {max_n}개 프레임만 평가합니다.")
+else:
+    print(f"[Eval] 전체 {len(uav_images)}개 프레임 평가합니다.")
 # ## Build model
 # Alexnet
 
