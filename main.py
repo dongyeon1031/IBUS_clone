@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import Isomap
 from PIL import Image
 import argparse
+torch.backends.cudnn.benchmark = True
 
 # # Load satellite images
 parser = argparse.ArgumentParser()
@@ -29,7 +30,7 @@ args = parser.parse_args()
 root_dir="./data/jeju"
 uav_images=os.listdir(os.path.join(root_dir,"query_images"))
 satellite_images=os.listdir(os.path.join(root_dir,"reference_images/offset_0_None"))
-batch_size=8
+batch_size=32
 transform=BuildTransforms(256)
 # uav_dataset=HelicopterUAV(root_dir,False, transform)
 satellite_dataset=HelicopterSatellite(root_dir,False, transform)
@@ -39,6 +40,8 @@ satellite_dataloader= DataLoader(satellite_dataset,batch_size=batch_size)
 
 gt=np.loadtxt(os.path.join(root_dir,"gt_matches.csv"),delimiter=',',dtype=str)[1:,:]
 
+uav_images = sorted(os.listdir(os.path.join(root_dir, "query_images")))
+satellite_images = sorted(os.listdir(os.path.join(root_dir, "reference_images/offset_0_None")))
 if args.eval_n and args.eval_n > 0:
     max_n = min(args.eval_n, len(uav_images), gt.shape[0])
     uav_images = uav_images[:max_n]
@@ -224,24 +227,27 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     pridict_local_id = order[0]
 
     info="UAV ID:{},Ture ID:{},Global ID:{},Distance:{}".format(uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id])
-    print(info)
+    # print(info)
     Pointer=local_search[pridict_local_id]+1
     history_predict.append(Pointer)
-    # results_info.append([uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id]])
-    # results_top_n.append([
-    #     uav_index,
-    #     true_id,
-    #     ";".join(map(str, top_n_ids)),
-    #     ";".join(f"{d:.6f}" for d in top_n_dists),
-    # ])
-    top_n_ids_str   = ";".join(map(str, top_n_ids))
+
+    pred_idx = int(local_search[pridict_local_id])                 # 0-based 인덱스
+    pred_fname = satellite_images[pred_idx]                        # 예: "0000165.jpg"
+    pred_id_csv = int(os.path.splitext(pred_fname)[0])             # 165 
+    top_n_ids_csv = [
+        int(os.path.splitext(satellite_images[int(local_search[j])])[0]) for j in order
+    ]
+    gt_ref_name = gt[uav_index][3]  # 예: "offset_0_None/0000165.jpg"
+    print(f"[check] GT={gt_ref_name}  Pred=offset_0_None/{pred_fname}")
+
+    top_n_ids_str   = ";".join(map(str, top_n_ids_csv))
     top_n_dists_str = ";".join(f"{d:.6f}" for d in top_n_dists)
 
     results_info.append([
-        uav_index,
-        true_id,
-        local_search[pridict_local_id],
-        local_distance[pridict_local_id],
+        int(uav_index),                 # UAV ID
+        int(true_id),                   # True ID (CSV 1-based)
+        int(pred_id_csv),               # Predict ID (CSV 1-based)
+        float(local_distance[pridict_local_id]),
         top_n_ids_str,
         top_n_dists_str
     ])
