@@ -159,9 +159,11 @@ def eq(m, n):#平均距离
 def frame2tensor(frame):
     return torch.from_numpy(frame/255.).float()[None, None].cuda()
 
-Pointer=0#指针,指向下一次可能出现的位置
-results_info=[]#实验结果保存
-history_predict=[]#历史定位信息
+Pointer=0
+results_info=[]
+history_predict=[]
+results_top_n=[]
+top_n = 5
 
 for uav_index in range(len(uav_images)):#对于每个无人机图像
     info=[]
@@ -203,13 +205,36 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         # img2_transform = cv2.perspectiveTransform(img2_dims, M)[0][0]
         distance=eq(img1_transform,[128, 128])#offset
         local_distance.append(distance)
-    pridict_local_id=np.argmin(local_distance)
+    # 거리 오름차순 정렬로 Top-n 후보 선정
+    order = np.argsort(local_distance)[:top_n]
+    top_n_ids   = [int(local_search[j])        for j in order]
+    top_n_dists = [float(local_distance[j])    for j in order]
+
+    pridict_local_id = order[0]
 
     info="UAV ID:{},Ture ID:{},Global ID:{},Distance:{}".format(uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id])
     print(info)
     Pointer=local_search[pridict_local_id]+1
     history_predict.append(Pointer)
-    results_info.append([uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id]])
+    # results_info.append([uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id]])
+    # results_top_n.append([
+    #     uav_index,
+    #     true_id,
+    #     ";".join(map(str, top_n_ids)),
+    #     ";".join(f"{d:.6f}" for d in top_n_dists),
+    # ])
+    top_n_ids_str   = ";".join(map(str, top_n_ids))
+    top_n_dists_str = ";".join(f"{d:.6f}" for d in top_n_dists)
+
+    results_info.append([
+        uav_index,
+        true_id,
+        local_search[pridict_local_id],
+        local_distance[pridict_local_id],
+        top_n_ids_str,
+        top_n_dists_str
+    ])
+
 
 # # Save results
 
@@ -228,7 +253,7 @@ while os.path.exists(results_path):
     results_path = os.path.join(results_dir, f"{base_name}_{i}{ext}")
     i += 1
 
-results_out = [["UAV ID", "True ID", "Predict ID", "Distance"]]
+results_out = [["UAV ID", "True ID", "Predict ID", "Distance", "Top5 IDs", "Top5 Distances"]]
 results_out.extend(results_info)
 results_out = np.array(results_out)
 
