@@ -21,7 +21,8 @@ from PIL import Image
 # In[31]:
 
 
-root_dir="./data/round2/Val"
+# root_dir="./data/round2/Val"
+root_dir="./data/jeju"
 uav_images=os.listdir(os.path.join(root_dir,"query_images"))
 satellite_images=os.listdir(os.path.join(root_dir,"reference_images/offset_0_None"))
 batch_size=8
@@ -214,15 +215,24 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
 
 # In[39]:
 
+# 결과 저장
+results_dir = "./outputs"
+os.makedirs(results_dir, exist_ok=True)
 
-results_path="results_out.csv"
-if os.path.exists(results_path):
-    results_out=np.loadtxt(results_path,delimiter=',',dtype=str)
-    results_out=np.array(results_out)
-else:
-    results_out=[["UAV ID","Ture ID","Predict ID","Distance"]]
-    results_out.extend(results_info)
-    results_out=np.array(results_out)
-    np.savetxt("results_out.csv",results_out,delimiter=',',fmt="%s")
+base_name = "results_out"
+ext = ".csv"
+results_path = os.path.join(results_dir, base_name + ext)
+
+i = 1
+while os.path.exists(results_path):
+    results_path = os.path.join(results_dir, f"{base_name}_{i}{ext}")
+    i += 1
+
+results_out = [["UAV ID", "True ID", "Predict ID", "Distance"]]
+results_out.extend(results_info)
+results_out = np.array(results_out)
+
+np.savetxt(results_path, results_out, delimiter=',', fmt="%s")
+print(f"✅ Results saved to: {results_path}")
 
 # 
