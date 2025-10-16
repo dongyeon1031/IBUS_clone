@@ -46,7 +46,12 @@ class HelicopterSatellite(Dataset):
         self.rotate=rotate
         # print("self.rotate",self.rotate)
     def load_satellite(self,path):
-        query_images_path = glob.glob(os.path.join(path, "offset_0_None", "*.png"))
+        # query_images_path = glob.glob(os.path.join(path, "offset_0_None", "*.png"))
+        image_extensions = ("*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG")
+        query_images_path = []
+        for ext in image_extensions:
+            query_images_path.extend(glob.glob(os.path.join(path, "offset_0_None", ext)))
+            
         relative_path=[]
         for p in query_images_path:
             relative_path.append(p[len(path)+1:])
