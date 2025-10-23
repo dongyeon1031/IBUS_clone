@@ -25,11 +25,15 @@ args = parser.parse_args()
 # In[31]:
 
 
-# root_dir="./data/round2/Val"
+root_dir="./data/round2/Val"
 # root_dir="./data/NewYorkFly/Val"
-root_dir="./data/jeju"
+# root_dir="./data/jeju"
 uav_images=os.listdir(os.path.join(root_dir,"query_images"))
+
+# 이미지를 오름차순으로 불러와야하는거 아닐까?
 satellite_images=os.listdir(os.path.join(root_dir,"reference_images/offset_0_None"))
+satellite_images = sorted(satellite_images)
+
 batch_size=32
 transform=BuildTransforms(256)
 # uav_dataset=HelicopterUAV(root_dir,False, transform)
@@ -56,8 +60,8 @@ device_ids = [0, 1]
 device = torch.device(f'cuda:{device_ids[0]}' if torch.cuda.is_available() else 'cpu')
 
 model_name="alexnet_triplet"
-# model=build_model(model_name,dropout_p=False).cuda()
-model = build_model(model_name, dropout_p=False)
+model=build_model(model_name,dropout_p=False).cuda()
+# model = build_model(model_name, dropout_p=False)
 model = torch.nn.DataParallel(model, device_ids=device_ids).to(device)
 
 # # Extract features
@@ -105,7 +109,7 @@ else:
 
 
 def manifold(feature,n_neighbors=5):
-    isomap = Isomap(n_neighbors=n_neighbors, n_components=1, p=2)
+    isomap = Isomap(n_neighbors=n_neighbors, n_components=1, p=2)   # n_components = 반환할 피처의 차원
     result = isomap.fit_transform(feature)
     return result
 
@@ -114,36 +118,48 @@ def manifold(feature,n_neighbors=5):
 
 satellite_result=manifold(satellite_feature)#Dimension-reduced features
 print("shape: ",satellite_result.shape)
+# print("result: ",satellite_result[np.argsort(satellite_result[:,0])])
 
-# # Visualization
+emb = satellite_result[:, 0]
+rank = np.argsort(emb)
+print("embedding min/max:", float(emb.min()), float(emb.max()))
+print("rank head:", rank[:10])
+
+plt.figure(figsize=(6, 4))
+plt.scatter(np.arange(len(emb)), emb,
+            c=np.arange(len(emb)), cmap='plasma', s=6)
+plt.title("Isomap Embedding vs Original Index")
+plt.xlabel("Original Image Index")
+plt.ylabel("Isomap 1D Embedding Value")
+plt.colorbar(label="Image index (color = order)")
+plt.tight_layout()
+plt.savefig("./outputs/isomap_scatter.png", dpi=200)
+plt.close()
+print("✅ Saved: ./outputs/isomap_scatter.png")
 
 # In[16]:
 
 
 satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
-# emb = satellite_result[:, 0].ravel() # 
-# N = emb.shape[0]
-# idx = np.arange(N)  # 파일명 오름차순과 동일한 기준
+# satellite_rank = np.arange(len(satellite_images), dtype=int)
 
-# corr = np.corrcoef(emb, idx)[0, 1]
-# if corr < 0:
-#     emb *= -1
-# satellite_rank = np.argsort(emb)
+# print("rank: ",satellite_rank)
+np.savetxt("./outputs/rank_debug.txt", satellite_rank, fmt="%d")
+satellite_images = np.array(satellite_images)[satellite_rank]
+# print("image index: ",satellite_images)
 
-print("rank: ",satellite_rank)
-np.savetxt("rank_debug.txt", satellite_rank, fmt="%d")
 
 
 # In[24]:
 
-
-Vis_10_images=[]
-for i in range(10):
-    satellite_index=satellite_rank[i]
-    satellite_bgr=cv2.imread(os.path.join(root_dir,"reference_images/offset_0_None",satellite_images[satellite_index]))
-    Vis_10_images.append(satellite_bgr)
-Vis_10_images=np.hstack(Vis_10_images)
-Image.fromarray(cv2.cvtColor(Vis_10_images,cv2.COLOR_BGR2RGB))
+# 시각화
+# Vis_10_images=[]
+# for i in range(10):
+#     satellite_index=satellite_rank[i]
+#     satellite_bgr=cv2.imread(os.path.join(root_dir,"reference_images/offset_0_None",satellite_images[satellite_index]))
+#     Vis_10_images.append(satellite_bgr)
+# Vis_10_images=np.hstack(Vis_10_images)
+# Image.fromarray(cv2.cvtColor(Vis_10_images,cv2.COLOR_BGR2RGB))
 
 # In[14]:
 
@@ -186,7 +202,6 @@ def frame2tensor(frame):
 Pointer=0
 results_info=[]
 history_predict=[]
-results_top_n=[]
 top_n = 5
 
 for uav_index in range(len(uav_images)):#对于每个无人机图像
@@ -200,10 +215,18 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     uav_gray=cv2.resize(uav_gray,(256,256))
     uav_image_tensor=frame2tensor(uav_gray)
     #取局部卫星图像
-    if Pointer>=10:
-        local_search=satellite_rank[Pointer-10:Pointer+10]
+    if Pointer>=5:
+        local_search=satellite_rank[Pointer-5:Pointer+5]
     else:
         local_search=satellite_rank[0:Pointer+10]
+
+    # 윈도우 어떻게 구성하는지 찍기
+    # win_inds = np.array(local_search, dtype=int)
+    # win_files = [satellite_images[i] for i in win_inds]
+
+    # print(f"[UAV {uav_index:04d}] pointer={Pointer:4d} | window idx={win_inds.tolist()} | files={[os.path.splitext(f)[0] for f in win_files]}")
+    # print(f"window idx={win_inds.tolist()} | ", satellite_images[Pointer], "| pointer: ",Pointer)
+    
 
     local_distance=[]
     for satellite_index in local_search:
@@ -236,17 +259,11 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
 
     pridict_local_id = order[0]
 
-    info="UAV ID:{},Ture ID:{},Global ID:{},Distance:{}".format(uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id])
+    info="UAV ID:{},True ID:{},Global ID:{},file Name:{},Distance:{}".format(uav_index,true_id,local_search[pridict_local_id],satellite_images[local_search[pridict_local_id]],local_distance[pridict_local_id])
     print(info)
     Pointer=local_search[pridict_local_id]+1
     history_predict.append(Pointer)
-    # results_info.append([uav_index,true_id,local_search[pridict_local_id],local_distance[pridict_local_id]])
-    # results_top_n.append([
-    #     uav_index,
-    #     true_id,
-    #     ";".join(map(str, top_n_ids)),
-    #     ";".join(f"{d:.6f}" for d in top_n_dists),
-    # ])
+
     top_n_ids_str   = ";".join(map(str, top_n_ids))
     top_n_dists_str = ";".join(f"{d:.6f}" for d in top_n_dists)
 
