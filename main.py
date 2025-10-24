@@ -25,9 +25,9 @@ args = parser.parse_args()
 # In[31]:
 
 
-root_dir="./data/round2/Val"
+# root_dir="./data/round2/Val"
 # root_dir="./data/NewYorkFly/Val"
-# root_dir="./data/jeju"
+root_dir="./data/jeju"
 uav_images=os.listdir(os.path.join(root_dir,"query_images"))
 uav_images = sorted(uav_images)
 
@@ -117,8 +117,8 @@ def visualize_match(uav_gray, sat_gray, mkpts0, mkpts1, mask, save_path, max_dra
                 p1 = (int(mkpts1[i,0]) + w, int(mkpts1[i,1]))
                 cv2.line(canvas, p0, p1, color, thickness, cv2.LINE_AA)
 
-        draw_lines(vis_all, out_idx, (0,0,255), 1)     # outliers (red)
-        draw_lines(vis_all, in_idx,  (0,255,0), 2)     # inliers  (green)
+        draw_lines(vis_all, out_idx, (0,0,255), 0.8) # outliers (red)
+        draw_lines(vis_all, in_idx,  (0,255,0), 1.1) # inliers  (green)
 
         inlier_ratio = float(inlier_mask.sum()) / float(N)
         text = f"matches={N}, inliers={inlier_mask.sum()} ({inlier_ratio*100:.1f}%)"
@@ -185,6 +185,7 @@ rank = np.argsort(emb)
 print("embedding min/max:", float(emb.min()), float(emb.max()))
 print("rank head:", rank[:10])
 
+# ====================== 정렬 순서 시각화 ======================
 plt.figure(figsize=(6, 4))
 plt.scatter(np.arange(len(emb)), emb,
             c=np.arange(len(emb)), cmap='plasma', s=6)
@@ -199,9 +200,9 @@ print("✅ Saved: ./outputs/isomap_scatter.png")
 
 # In[16]:
 
-
-satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
-# satellite_rank = np.arange(len(satellite_images), dtype=int)
+# ===================== 랭크 강제 정렬 =====================
+# satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
+satellite_rank = np.arange(len(satellite_images), dtype=int)
 
 # print("rank: ",satellite_rank)
 np.savetxt("./outputs/rank_debug.txt", satellite_rank, fmt="%d")
@@ -254,8 +255,8 @@ def frame2tensor(frame):
     return torch.from_numpy(frame/255.).float()[None, None].cuda()
 
 # Pointer=0
-pointer_pos = 0    # satellite_rank의 위치(0-based)
-L = 10              # 좌우 창 크기 (±L) → 총 2L+1개
+pointer_pos = 0 # satellite_rank의 위치(0-based)
+L = 10 # 좌우 창 크기 → 총 2L+1개
 results_info=[]
 history_predict=[]
 top_n = 5
@@ -270,23 +271,14 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     uav_gray=cv2.imread(os.path.join(root_dir,"query_images",uav_path),0)
     uav_gray=cv2.resize(uav_gray,(256,256))
     uav_image_tensor=frame2tensor(uav_gray)
-    #取局部卫星图像
-    # if Pointer>=5:
-    #     local_search=satellite_rank[Pointer-5:Pointer+5]
-    # else:
-    #     local_search=satellite_rank[0:Pointer+10]
     lo = max(0, pointer_pos - L)
     hi = min(len(satellite_rank), pointer_pos + L + 1)  # +1 해야 포괄적 슬라이스
-    local_pos  = np.arange(lo, hi)                      # 창의 '위치'들
-    local_inds = satellite_rank[local_pos]              # 실제 이미지 인덱스(값)
+
+    local_pos  = np.arange(lo, hi) # 창의 '위치'들
+    local_inds = satellite_rank[local_pos] # 실제 이미지 인덱스(값)
 
     # 윈도우 어떻게 구성하는지 찍기
-    # win_inds = np.array(local_search, dtype=int)
-    # win_files = [satellite_images[i] for i in win_inds]
-
-    # print(f"[UAV {uav_index:04d}] pointer={Pointer:4d} | window idx={win_inds.tolist()} | files={[os.path.splitext(f)[0] for f in win_files]}")
-    # print(f"window idx={win_inds.tolist()} | ", satellite_images[Pointer], "| pointer: ",Pointer)
-    # win_inds  = np.array(local_inds, dtype=int)              # 실제 인덱스들
+    # win_inds  = np.array(local_inds, dtype=int)
     # win_files = [satellite_images[i] for i in win_inds]
     # print(f"[UAV {uav_index:04d}] pos={pointer_pos:4d} | window_pos={local_pos.tolist()} | window_idx={win_inds.tolist()}")
     
@@ -334,7 +326,7 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     chosen_idx = int(local_inds[order[0]])    # 실제 인덱스(값)
     chosen_fn  = satellite_images[chosen_idx]
 
-    info = f"UAV ID:{uav_index},True ID:{true_id},Global ID:{chosen_idx},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
+    info = f"UAV ID:{uav_index+1},True ID:{true_id},Global ID:{chosen_idx+1},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
     print(info)
     # Pointer=local_search[pridict_local_id]+1
     pointer_pos = int(np.where(satellite_rank == chosen_idx)[0][0]) + 1
