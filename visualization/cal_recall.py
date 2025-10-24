@@ -1,7 +1,7 @@
 import pandas as pd
 
 # CSV 파일 경로 지정
-csv_path = "./outputs/results_out_newyork.csv"
+csv_path = "./outputs/results_out.csv"
 
 # CSV 불러오기
 df = pd.read_csv(csv_path)

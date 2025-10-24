@@ -178,13 +178,7 @@ print("Sorting error:",np.mean(abs(erro)))
 # # Image matching
 # LoFTR
 
-# In[25]:
-
-
 from match.src.loftr import LoFTR, default_cfg
-
-# In[26]:
-
 
 #https://github.com/zju3dv/LoFTR
 matcher = LoFTR(config=default_cfg)
@@ -199,7 +193,9 @@ def eq(m, n):#平均距离
 def frame2tensor(frame):
     return torch.from_numpy(frame/255.).float()[None, None].cuda()
 
-Pointer=0
+# Pointer=0
+pointer_pos = 0    # satellite_rank의 위치(0-based)
+L = 10              # 좌우 창 크기 (±L) → 총 2L+1개
 results_info=[]
 history_predict=[]
 top_n = 5
@@ -215,10 +211,14 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     uav_gray=cv2.resize(uav_gray,(256,256))
     uav_image_tensor=frame2tensor(uav_gray)
     #取局部卫星图像
-    if Pointer>=5:
-        local_search=satellite_rank[Pointer-5:Pointer+5]
-    else:
-        local_search=satellite_rank[0:Pointer+10]
+    # if Pointer>=5:
+    #     local_search=satellite_rank[Pointer-5:Pointer+5]
+    # else:
+    #     local_search=satellite_rank[0:Pointer+10]
+    lo = max(0, pointer_pos - L)
+    hi = min(len(satellite_rank), pointer_pos + L + 1)  # +1 해야 포괄적 슬라이스
+    local_pos  = np.arange(lo, hi)                      # 창의 '위치'들
+    local_inds = satellite_rank[local_pos]              # 실제 이미지 인덱스(값)
 
     # 윈도우 어떻게 구성하는지 찍기
     # win_inds = np.array(local_search, dtype=int)
@@ -226,10 +226,13 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
 
     # print(f"[UAV {uav_index:04d}] pointer={Pointer:4d} | window idx={win_inds.tolist()} | files={[os.path.splitext(f)[0] for f in win_files]}")
     # print(f"window idx={win_inds.tolist()} | ", satellite_images[Pointer], "| pointer: ",Pointer)
+    # win_inds  = np.array(local_inds, dtype=int)              # 실제 인덱스들
+    # win_files = [satellite_images[i] for i in win_inds]
+    # print(f"[UAV {uav_index:04d}] pos={pointer_pos:4d} | window_pos={local_pos.tolist()} | window_idx={win_inds.tolist()}")
     
 
     local_distance=[]
-    for satellite_index in local_search:
+    for satellite_index in local_inds:
         satellite_gray=cv2.imread(os.path.join(root_dir,"reference_images/offset_0_None",satellite_images[satellite_index]),0)
         satellite_gray=cv2.resize(satellite_gray,(256,256))
         satellite_image_tensor=frame2tensor(satellite_gray)
@@ -254,24 +257,30 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         local_distance.append(distance)
     # 거리 오름차순 정렬로 Top-n 후보 선정
     order = np.argsort(local_distance)[:top_n]
-    top_n_ids   = [int(local_search[j])        for j in order]
-    top_n_dists = [float(local_distance[j])    for j in order]
 
-    pridict_local_id = order[0]
+    # 실제 이미지 인덱스(값)들에서 top-k 뽑기
+    top_n_idx   = [int(local_inds[j])         for j in order]                  # 값(파일 인덱스)
+    top_n_dists = [float(local_distance[j])   for j in order]
 
-    info="UAV ID:{},True ID:{},Global ID:{},file Name:{},Distance:{}".format(uav_index,true_id,local_search[pridict_local_id],satellite_images[local_search[pridict_local_id]],local_distance[pridict_local_id])
+    # 최종 선택
+    chosen_idx = int(local_inds[order[0]])    # 실제 인덱스(값)
+    chosen_fn  = satellite_images[chosen_idx]
+
+    info = f"UAV ID:{uav_index},True ID:{true_id},Global ID:{chosen_idx},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
     print(info)
-    Pointer=local_search[pridict_local_id]+1
-    history_predict.append(Pointer)
+    # Pointer=local_search[pridict_local_id]+1
+    pointer_pos = int(np.where(satellite_rank == chosen_idx)[0][0]) + 1
+    pointer_pos = min(pointer_pos, len(satellite_rank) - 1)  # 경계 보호
+    history_predict.append(pointer_pos)
 
-    top_n_ids_str   = ";".join(map(str, top_n_ids))
+    top_n_ids_str   = ";".join(map(str, top_n_idx))
     top_n_dists_str = ";".join(f"{d:.6f}" for d in top_n_dists)
 
     results_info.append([
         uav_index,
         true_id,
-        local_search[pridict_local_id],
-        local_distance[pridict_local_id],
+        chosen_idx,                       # Predict ID
+        float(local_distance[order[0]]),  # Distance
         top_n_ids_str,
         top_n_dists_str
     ])
