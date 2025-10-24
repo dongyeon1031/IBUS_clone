@@ -255,6 +255,7 @@ def frame2tensor(frame):
     return torch.from_numpy(frame/255.).float()[None, None].cuda()
 
 # Pointer=0
+last_chosen_idx = 0   # 첫 프레임 이전 상태라고 가정(0-based)
 pointer_pos = 0 # satellite_rank의 위치(0-based)
 L = 10 # 좌우 창 크기 → 총 2L+1개
 results_info=[]
@@ -316,7 +317,41 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         distance=eq(img1_transform,[128, 128])#offset
         local_distance.append(distance)
     # 거리 오름차순 정렬로 Top-n 후보 선정
-    order = np.argsort(local_distance)[:top_n]
+    # order = np.argsort(local_distance)[:top_n]
+    # ===== 관측비용 정규화 =====
+    obs = np.array(local_distance, dtype=np.float32)
+    finite_mask = np.isfinite(obs)
+    if not finite_mask.any():
+        # 전부 실패면 큰 값으로 처리
+        obs_norm = np.ones_like(obs, dtype=np.float32)
+    else:
+        m = float(np.nanmin(obs[finite_mask]))
+        M = float(np.nanmax(obs[finite_mask]))
+        obs_norm = (obs - m) / (M - m + 1e-6)
+        obs_norm[~finite_mask] = 1.0  # 실패는 최악 점수
+
+    # ===== 방향성(전이) 패널티 =====
+    # prev_idx: 직전 선택된 '실제' 인덱스(0-based)
+    prev_idx = 0 if uav_index == 0 else last_chosen_idx
+
+    # 하이퍼파라미터 (원하는 방향성 강도에 맞춰 조정)
+    exp_step = 1   # 기대 전진량(보통 1)
+    tol      = 2   # 허용 여유 (±tol 이내는 패널티 작게)
+    alpha    = 0.2 # 과대/과소 점프 패널티 가중치
+    beta     = 0.8 # 역진(backward) 패널티 가중치 (뒤로 가면 크게)
+
+    scores = []
+    for j, cand_idx in enumerate(local_inds):
+        delta    = int(cand_idx) - int(prev_idx)          # 얼마나 전/후진했는가
+        back_pen = max(0, -delta)                          # 뒤로 가면 양수
+        jump_pen = max(0, abs(delta - exp_step) - tol)     # 기대 step에서 벗어난 점프
+        trans    = alpha * jump_pen + beta * back_pen
+        score    = float(obs_norm[j]) + float(trans)       # 관측비용 + 방향성 패널티
+        scores.append(score)
+    scores = np.array(scores, dtype=np.float32)
+
+    # ===== Top-k 및 최종 선택 =====
+    order = np.argsort(scores)[:top_n]
 
     # 실제 이미지 인덱스(값)들에서 top-k 뽑기
     top_n_idx   = [int(local_inds[j])         for j in order]                  # 값(파일 인덱스)
@@ -331,6 +366,7 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     # Pointer=local_search[pridict_local_id]+1
     pointer_pos = int(np.where(satellite_rank == chosen_idx)[0][0]) + 1
     pointer_pos = min(pointer_pos, len(satellite_rank) - 1)  # 경계 보호
+    last_chosen_idx = chosen_idx
     history_predict.append(pointer_pos)
 
     top_n_ids_str   = ";".join(map(str, top_n_idx))
