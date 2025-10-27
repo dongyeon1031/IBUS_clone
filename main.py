@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[21]:
-
-
 import torch
 import numpy as np
 import cv2
 import os
 from dataset import HelicopterUAV,HelicopterSatellite,BuildTransforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from models import build_model
 import matplotlib.pyplot as plt
@@ -20,30 +17,59 @@ import argparse
 # # Load satellite images
 parser = argparse.ArgumentParser()
 parser.add_argument('--eval-n', type=int, default=0, help="앞 n개만 평가, 0이면 전체 평가")
+parser.add_argument('--sub-start', type=int, default=None, help="0-based subset start index (inclusive)")
+parser.add_argument('--sub-end',   type=int, default=None, help="0-based subset end index (inclusive)")
 args = parser.parse_args()
 
-# In[31]:
+# -----------------------------
+# 2) 파일 목록 로드 & 정렬
+# -----------------------------
+root_dir="./data/jeju"
+uav_images = sorted(os.listdir(os.path.join(root_dir, "query_images")))
+satellite_images = sorted(os.listdir(os.path.join(root_dir, "reference_images/offset_0_None")))
+gt = np.loadtxt(os.path.join(root_dir, "gt_matches.csv"), delimiter=',', dtype=str)[1:, :]
 
+# -----------------------------
+# 3) 서브셋 적용 (255~522 포함)
+# -----------------------------
+if args.sub_start is not None and args.sub_end is not None:
+    ss = max(0, args.sub_start)
+    ee = min(len(satellite_images)-1, args.sub_end)
+    assert ss <= ee, "sub-start <= sub-end 여야 합니다."
+
+    sel = np.arange(ss, ee+1, dtype=int)
+
+    # 파일/GT에 동일한 슬라이싱 적용
+    uav_images       = [uav_images[i] for i in sel]
+    satellite_images = [satellite_images[i] for i in sel]
+    gt               = gt[sel, :]  # GT도 같은 구간만
+
+    print(f"[Subset] use indices {ss}..{ee} (N={len(sel)})")
+else:
+    sel = None
+    print(f"[Subset] not used. Full set: N_uav={len(uav_images)}, N_sat={len(satellite_images)}")
 
 # root_dir="./data/round2/Val"
 # root_dir="./data/NewYorkFly/Val"
-root_dir="./data/jeju"
-uav_images=os.listdir(os.path.join(root_dir,"query_images"))
-uav_images = sorted(uav_images)
+# root_dir="./data/jeju"
+# uav_images=os.listdir(os.path.join(root_dir,"query_images"))
+# uav_images = sorted(uav_images)
+# gt=np.loadtxt(os.path.join(root_dir,"gt_matches.csv"),delimiter=',',dtype=str)[1:,:]
 
-# 이미지를 오름차순으로 불러와야하는거 아닐까?
-satellite_images=os.listdir(os.path.join(root_dir,"reference_images/offset_0_None"))
-satellite_images = sorted(satellite_images)
+# # 이미지를 오름차순으로 불러와야하는거 아닐까?
+# satellite_images=os.listdir(os.path.join(root_dir,"reference_images/offset_0_None"))
+# satellite_images = sorted(satellite_images)
 
 batch_size=32
 transform=BuildTransforms(256)
-# uav_dataset=HelicopterUAV(root_dir,False, transform)
-satellite_dataset=HelicopterSatellite(root_dir,False, transform)
-#
-# uav_dataloader= DataLoader(uav_dataset,batch_size=batch_size)
-satellite_dataloader= DataLoader(satellite_dataset,batch_size=batch_size)
 
-gt=np.loadtxt(os.path.join(root_dir,"gt_matches.csv"),delimiter=',',dtype=str)[1:,:]
+satellite_full = HelicopterSatellite(root_dir, False, transform)
+if sel is not None:
+    satellite_dataset = Subset(satellite_full, sel)   # 딱 서브셋만 추출
+else:
+    satellite_dataset = satellite_full
+
+satellite_dataloader = DataLoader(satellite_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
 if args.eval_n and args.eval_n > 0:
     max_n = min(args.eval_n, len(uav_images), gt.shape[0])
@@ -54,9 +80,6 @@ else:
     print(f"[Eval] 전체 {len(uav_images)}개 프레임 평가합니다.")
 # ## Build model
 # Alexnet
-
-# In[5]:
-
 device_ids = [0, 1]
 device = torch.device(f'cuda:{device_ids[0]}' if torch.cuda.is_available() else 'cpu')
 
@@ -66,10 +89,6 @@ model=build_model(model_name,dropout_p=False).cuda()
 model = torch.nn.DataParallel(model, device_ids=device_ids).to(device)
 
 # # Extract features
-
-# In[6]:
-
-
 def visualize_match(uav_gray, sat_gray, mkpts0, mkpts1, mask, save_path, max_draw=300):
     """LoFTR 매칭 결과를 이미지로 저장.
     - uav_gray, sat_gray: (H,W) 그레이스케일, 이미 256x256으로 리사이즈된 것 사용
@@ -154,35 +173,31 @@ def ExtractFeature(model, Dataloader):
     return drone_name,drone_feature
 
 # ### Save satellite features
+save_path = "features"
+# 서브셋이면 캐시 파일명을 분기
+if args.sub_start is not None and args.sub_end is not None:
+    ss, ee = ss, ee  # 이미 위에서 계산됨
+    satellite_feature_file = f"satellite_feature_{ss}_{ee}.npy"
+else:
+    satellite_feature_file = "satellite_feature.npy"
 
-# In[8]:
-
-
-save_path="features"
-satellite_feature_file='satellite_feature.npy'
-
-satellite_feature_path=os.path.join(save_path, satellite_feature_file)
+satellite_feature_path = os.path.join(save_path, satellite_feature_file)
+os.makedirs(save_path, exist_ok=True)
 
 if os.path.exists(satellite_feature_path):
-    print("Existing...")
-    satellite_feature =np.load(satellite_feature_path)
+    print(f"Existing... ({satellite_feature_file})")
+    satellite_feature = np.load(satellite_feature_path)
 else:
-    print("ExtractFeature。。。")
-    satellite_name,satellite_feature =ExtractFeature(model,satellite_dataloader)
-    satellite_feature=satellite_feature.cpu().numpy()
-    np.save(os.path.join(save_path, satellite_feature_file), satellite_feature)
+    print("ExtractFeature...")
+    satellite_name, satellite_feature = ExtractFeature(model, satellite_dataloader)
+    satellite_feature = satellite_feature.cpu().numpy()
+    np.save(satellite_feature_path, satellite_feature)
 
 # # Image sort
-
-# In[9]:
-
-
 def manifold(feature,n_neighbors=5):
     isomap = Isomap(n_neighbors=n_neighbors, n_components=1, p=2)   # n_components = 반환할 피처의 차원
     result = isomap.fit_transform(feature)
     return result
-
-# In[13]:
 
 
 satellite_result=manifold(satellite_feature)#Dimension-reduced features
@@ -190,6 +205,7 @@ print("shape: ",satellite_result.shape)
 # print("result: ",satellite_result[np.argsort(satellite_result[:,0])])
 
 emb = satellite_result[:, 0]
+
 rank = np.argsort(emb)
 print("embedding min/max:", float(emb.min()), float(emb.max()))
 print("rank head:", rank[:10])
@@ -207,20 +223,16 @@ plt.savefig("./outputs/isomap_scatter.png", dpi=200)
 plt.close()
 print("✅ Saved: ./outputs/isomap_scatter.png")
 
-# In[16]:
 
 # ===================== 랭크 강제 정렬 =====================
-# satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
-satellite_rank = np.arange(len(satellite_images), dtype=int)
+satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
+# satellite_rank = np.arange(len(satellite_images), dtype=int)
 
 # print("rank: ",satellite_rank)
 np.savetxt("./outputs/rank_debug.txt", satellite_rank, fmt="%d")
 satellite_images = np.array(satellite_images)[satellite_rank]
 # print("image index: ",satellite_images)
 
-
-
-# In[24]:
 
 # 시각화
 # Vis_10_images=[]
@@ -230,9 +242,6 @@ satellite_images = np.array(satellite_images)[satellite_rank]
 #     Vis_10_images.append(satellite_bgr)
 # Vis_10_images=np.hstack(Vis_10_images)
 # Image.fromarray(cv2.cvtColor(Vis_10_images,cv2.COLOR_BGR2RGB))
-
-# In[14]:
-
 
 satellite_rank_true=range(satellite_result.shape[0])
 plt.scatter(satellite_rank_true,satellite_result, c=satellite_rank_true, cmap='brg')
@@ -254,9 +263,6 @@ from match.src.loftr import LoFTR, default_cfg
 matcher = LoFTR(config=default_cfg)
 matcher.load_state_dict(torch.load("match/weights/outdoor_ds.ckpt")['state_dict'])
 matcher = matcher.eval().cuda()
-
-# In[32]:
-
 
 def eq(m, n):#平均距离
     return np.sqrt(np.sum((m - n) ** 2))
@@ -392,10 +398,6 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
 
 
 # # Save results
-
-# In[39]:
-
-# 결과 저장
 results_dir = "./outputs"
 os.makedirs(results_dir, exist_ok=True)
 
@@ -414,6 +416,3 @@ results_out = np.array(results_out)
 
 np.savetxt(results_path, results_out, delimiter=',', fmt="%s")
 print(f"✅ Results saved to: {results_path}")
-
-# 
-
