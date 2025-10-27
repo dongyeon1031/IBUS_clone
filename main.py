@@ -206,6 +206,26 @@ print("shape: ",satellite_result.shape)
 
 emb = satellite_result[:, 0]
 
+# ======================== 꺾이는 구간 인덱스 구하기 ========================
+# ---- 1) (선택) 약간 스무딩: 이동평균 (창 크기 odd 권장) ----
+def smooth_1d(x, w=7):
+    if w <= 1: return x.copy()
+    k = np.ones(w, dtype=np.float32) / w
+    pad = w // 2
+    xpad = np.pad(x, (pad, pad), mode="edge")
+    return np.convolve(xpad, k, mode="valid")
+
+emb_s = smooth_1d(emb, w=9)   # 꺾임 검출 안정화용
+
+# ---- 2) 국소 극값(기울기 부호 변화) 지점 찾기 ----
+d1 = np.diff(emb_s)                   # 1차차분
+sgn = np.sign(d1)                     # 기울기 부호
+turn_idx = np.where(sgn[:-1] * sgn[1:] < 0)[0] + 1   # 부호가 바뀌는 위치(중간 인덱스)
+# ---- 4) 결과 출력 ----
+print("[Turn points by sign-change] (index, emb):")
+for i in turn_idx:
+    print(int(i), float(emb[i]))
+
 rank = np.argsort(emb)
 print("embedding min/max:", float(emb.min()), float(emb.max()))
 print("rank head:", rank[:10])
