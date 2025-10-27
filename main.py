@@ -117,8 +117,17 @@ def visualize_match(uav_gray, sat_gray, mkpts0, mkpts1, mask, save_path, max_dra
                 p1 = (int(mkpts1[i,0]) + w, int(mkpts1[i,1]))
                 cv2.line(canvas, p0, p1, color, thickness, cv2.LINE_AA)
 
-        draw_lines(vis_all, out_idx, (0,0,255), 0.8) # outliers (red)
-        draw_lines(vis_all, in_idx,  (0,255,0), 1.1) # inliers  (green)
+        def draw_lines(canvas, pick_idx, color, alpha=0.35):
+            """매칭 선을 반투명하게 얇게 표시"""
+            overlay = canvas.copy()
+            for i in pick_idx:
+                p0 = (int(mkpts0[i,0]), int(mkpts0[i,1]))
+                p1 = (int(mkpts1[i,0]) + w, int(mkpts1[i,1]))
+                cv2.line(overlay, p0, p1, color, 1, cv2.LINE_AA)
+            # 반투명하게 합성 (alpha 작을수록 더 얇게)
+            cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0, canvas)
+        draw_lines(vis_all, out_idx, (0,0,255), 0.35) # outliers (red)
+        draw_lines(vis_all, in_idx,  (0,255,0), 0.8) # inliers  (green)
 
         inlier_ratio = float(inlier_mask.sum()) / float(N)
         text = f"matches={N}, inliers={inlier_mask.sum()} ({inlier_ratio*100:.1f}%)"
@@ -301,12 +310,12 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
             mkpts1 = batch['mkpts1_f'].cpu().numpy()
         M, mask = cv2.findHomography(mkpts0,mkpts1, cv2.RANSAC, 3)#Homography
 
-        # ==== 시각화: 매칭 시각화 저장 ====
-        # uav_gray / satellite_gray는 이미 256x256으로 리사이즈한 그레이 이미지
+        # # ==== 시각화: 매칭 시각화 저장 ====
+        # # uav_gray / satellite_gray는 이미 256x256으로 리사이즈한 그레이 이미지
         # save_dir = "./outputs/match_viz"
         # save_name = f"uav{uav_index:04d}_cand{int(satellite_index):04d}.png"
         # visualize_match(uav_gray, satellite_gray, mkpts0, mkpts1, mask, os.path.join(save_dir, save_name))
-        # ===================================== 
+        # # ===================================== 
 
         mkpts0,mkpts1=mkpts0[np.where(mask[:,0]==1)],mkpts1[np.where(mask[:,0]==1)]
 
@@ -331,7 +340,7 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         obs_norm[~finite_mask] = 1.0  # 실패는 최악 점수
 
     # ===== 방향성(전이) 패널티 =====
-    # prev_idx: 직전 선택된 '실제' 인덱스(0-based)
+    # prev_idx: 직전 선택된 실제 인덱스(0-based)
     prev_idx = 0 if uav_index == 0 else last_chosen_idx
 
     # 하이퍼파라미터 (원하는 방향성 강도에 맞춰 조정)
@@ -354,14 +363,14 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     order = np.argsort(scores)[:top_n]
 
     # 실제 이미지 인덱스(값)들에서 top-k 뽑기
-    top_n_idx   = [int(local_inds[j])         for j in order]                  # 값(파일 인덱스)
+    top_n_idx   = [int(local_inds[j])         for j in order] # 값(파일 인덱스)
     top_n_dists = [float(local_distance[j])   for j in order]
 
     # 최종 선택
     chosen_idx = int(local_inds[order[0]])    # 실제 인덱스(값)
     chosen_fn  = satellite_images[chosen_idx]
 
-    info = f"UAV ID:{uav_index+1},True ID:{true_id},Global ID:{chosen_idx+1},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
+    info = f"UAV ID:{uav_index},True ID:{true_id},Global ID:{chosen_idx},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
     print(info)
     # Pointer=local_search[pridict_local_id]+1
     pointer_pos = int(np.where(satellite_rank == chosen_idx)[0][0]) + 1
