@@ -5,6 +5,7 @@ import torch
 import numpy as np
 import cv2
 import os
+from visualization import save_topk_panel, visualize_match
 from dataset import HelicopterUAV,HelicopterSatellite,BuildTransforms
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
@@ -24,7 +25,10 @@ args = parser.parse_args()
 # -----------------------------
 # 2) 파일 목록 로드 & 정렬
 # -----------------------------
+# root_dir="./data/round2/Val"
+# root_dir="./data/NewYorkFly/Val"
 root_dir="./data/jeju"
+# root_dir="./data/daegu"
 uav_images = sorted(os.listdir(os.path.join(root_dir, "query_images")))
 satellite_images = sorted(os.listdir(os.path.join(root_dir, "reference_images/offset_0_None")))
 gt = np.loadtxt(os.path.join(root_dir, "gt_matches.csv"), delimiter=',', dtype=str)[1:, :]
@@ -49,8 +53,7 @@ else:
     sel = None
     print(f"[Subset] not used. Full set: N_uav={len(uav_images)}, N_sat={len(satellite_images)}")
 
-# root_dir="./data/round2/Val"
-# root_dir="./data/NewYorkFly/Val"
+
 # root_dir="./data/jeju"
 # uav_images=os.listdir(os.path.join(root_dir,"query_images"))
 # uav_images = sorted(uav_images)
@@ -89,74 +92,6 @@ model=build_model(model_name,dropout_p=False).cuda()
 model = torch.nn.DataParallel(model, device_ids=device_ids).to(device)
 
 # # Extract features
-def visualize_match(uav_gray, sat_gray, mkpts0, mkpts1, mask, save_path, max_draw=300):
-    """LoFTR 매칭 결과를 이미지로 저장.
-    - uav_gray, sat_gray: (H,W) 그레이스케일, 이미 256x256으로 리사이즈된 것 사용
-    - mkpts0, mkpts1: (N,2) float32
-    - mask: (N,1) uint8 (RANSAC inlier=1), 없으면 None 가능
-    """
-    # 컬러로 변환
-    img0 = cv2.cvtColor(uav_gray, cv2.COLOR_GRAY2BGR)
-    img1 = cv2.cvtColor(sat_gray, cv2.COLOR_GRAY2BGR)
-
-    N = mkpts0.shape[0]
-    if N == 0:
-        # 매칭 없음 표시만 저장
-        vis = cv2.hconcat([img0, img1])
-        cv2.putText(vis, "No matches", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        cv2.imwrite(save_path, vis)
-        return
-
-    # 그릴 인덱스 선택 (최대 max_draw개)
-    idxs = np.arange(N)
-    if N > max_draw:
-        idxs = np.random.choice(N, max_draw, replace=False)
-
-    # KeyPoint / DMatch 리스트로 변환 (drawMatches 사용)
-    kp0 = [cv2.KeyPoint(float(mkpts0[i,0]), float(mkpts0[i,1]), 1) for i in idxs]
-    kp1 = [cv2.KeyPoint(float(mkpts1[i,0]), float(mkpts1[i,1]), 1) for i in idxs]
-    matches = [cv2.DMatch(_queryIdx=j, _trainIdx=j, _distance=0) for j in range(len(idxs))]
-
-    # 전체 매칭 그리기
-    vis_all = cv2.drawMatches(img0, kp0, img1, kp1, matches, None,
-                              flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-
-    # inlier만 별도로 강조(초록), outlier는 빨강 선으로 덧그림
-    if mask is not None and mask.size == N:
-        inlier_mask = mask.ravel().astype(bool)
-        in_idx = idxs[inlier_mask[idxs]] if N > max_draw else idxs[inlier_mask]
-        out_idx = idxs[~inlier_mask[idxs]] if N > max_draw else idxs[~inlier_mask]
-
-        # 선 직접 그리기 (좌측 폭)
-        w = img0.shape[1]
-        def draw_lines(canvas, pick_idx, color, thickness=1):
-            for i in pick_idx:
-                p0 = (int(mkpts0[i,0]), int(mkpts0[i,1]))
-                p1 = (int(mkpts1[i,0]) + w, int(mkpts1[i,1]))
-                cv2.line(canvas, p0, p1, color, thickness, cv2.LINE_AA)
-
-        def draw_lines(canvas, pick_idx, color, alpha=0.35):
-            """매칭 선을 반투명하게 얇게 표시"""
-            overlay = canvas.copy()
-            for i in pick_idx:
-                p0 = (int(mkpts0[i,0]), int(mkpts0[i,1]))
-                p1 = (int(mkpts1[i,0]) + w, int(mkpts1[i,1]))
-                cv2.line(overlay, p0, p1, color, 1, cv2.LINE_AA)
-            # 반투명하게 합성 (alpha 작을수록 더 얇게)
-            cv2.addWeighted(overlay, alpha, canvas, 1 - alpha, 0, canvas)
-        draw_lines(vis_all, out_idx, (0,0,255), 0.35) # outliers (red)
-        draw_lines(vis_all, in_idx,  (0,255,0), 0.8) # inliers  (green)
-
-        inlier_ratio = float(inlier_mask.sum()) / float(N)
-        text = f"matches={N}, inliers={inlier_mask.sum()} ({inlier_ratio*100:.1f}%)"
-        cv2.putText(vis_all, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,0), 4)    # 검정 테두리
-        cv2.putText(vis_all, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)  # 흰색 본문
-
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    cv2.imwrite(save_path, vis_all)
-
-
 def ExtractFeature(model, Dataloader):
     model.eval()
     drone_name = []
@@ -206,25 +141,25 @@ print("shape: ",satellite_result.shape)
 
 emb = satellite_result[:, 0]
 
-# ======================== 꺾이는 구간 인덱스 구하기 ========================
-# ---- 1) (선택) 약간 스무딩: 이동평균 (창 크기 odd 권장) ----
-def smooth_1d(x, w=7):
-    if w <= 1: return x.copy()
-    k = np.ones(w, dtype=np.float32) / w
-    pad = w // 2
-    xpad = np.pad(x, (pad, pad), mode="edge")
-    return np.convolve(xpad, k, mode="valid")
+# # ======================== 꺾이는 구간 인덱스 구하기 ========================
+# # ---- 1) (선택) 약간 스무딩: 이동평균 (창 크기 odd 권장) ----
+# def smooth_1d(x, w=7):
+#     if w <= 1: return x.copy()
+#     k = np.ones(w, dtype=np.float32) / w
+#     pad = w // 2
+#     xpad = np.pad(x, (pad, pad), mode="edge")
+#     return np.convolve(xpad, k, mode="valid")
 
-emb_s = smooth_1d(emb, w=9)   # 꺾임 검출 안정화용
+# emb_s = smooth_1d(emb, w=9)   # 꺾임 검출 안정화용
 
-# ---- 2) 국소 극값(기울기 부호 변화) 지점 찾기 ----
-d1 = np.diff(emb_s)                   # 1차차분
-sgn = np.sign(d1)                     # 기울기 부호
-turn_idx = np.where(sgn[:-1] * sgn[1:] < 0)[0] + 1   # 부호가 바뀌는 위치(중간 인덱스)
-# ---- 4) 결과 출력 ----
-print("[Turn points by sign-change] (index, emb):")
-for i in turn_idx:
-    print(int(i), float(emb[i]))
+# # ---- 2) 국소 극값(기울기 부호 변화) 지점 찾기 ----
+# d1 = np.diff(emb_s)                   # 1차차분
+# sgn = np.sign(d1)                     # 기울기 부호
+# turn_idx = np.where(sgn[:-1] * sgn[1:] < 0)[0] + 1   # 부호가 바뀌는 위치(중간 인덱스)
+# # ---- 4) 결과 출력 ----
+# print("[Turn points by sign-change] (index, emb):")
+# for i in turn_idx:
+#     print(int(i), float(emb[i]))
 
 rank = np.argsort(emb)
 print("embedding min/max:", float(emb.min()), float(emb.max()))
@@ -245,8 +180,8 @@ print("✅ Saved: ./outputs/isomap_scatter.png")
 
 
 # ===================== 랭크 강제 정렬 =====================
-satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
-# satellite_rank = np.arange(len(satellite_images), dtype=int)
+# satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
+satellite_rank = np.arange(len(satellite_images), dtype=int)
 
 # print("rank: ",satellite_rank)
 np.savetxt("./outputs/rank_debug.txt", satellite_rank, fmt="%d")
@@ -319,22 +254,28 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
     # print(f"[UAV {uav_index:04d}] pos={pointer_pos:4d} | window_pos={local_pos.tolist()} | window_idx={win_inds.tolist()}")
     
 
-    local_distance=[]
-    for satellite_index in local_inds:
-        satellite_gray=cv2.imread(os.path.join(root_dir,"reference_images/offset_0_None",satellite_images[satellite_index]),0)
-        satellite_gray=cv2.resize(satellite_gray,(256,256))
-        satellite_image_tensor=frame2tensor(satellite_gray)
+    # ==== 후보별 지표 수집 ====
+    cand_inliers = []
+    cand_totals  = []
+    cand_dists   = []
+    local_distance = []   # 중심점 변위 distance (= cand_dists와 동일)
 
-        batch={}
-        batch['image0']=uav_image_tensor
-        batch['image1']=satellite_image_tensor
+    for satellite_index in local_inds:
+        sat_path = os.path.join(root_dir,"reference_images/offset_0_None",satellite_images[satellite_index])
+        satellite_gray = cv2.imread(sat_path, 0)
+        satellite_gray = cv2.resize(satellite_gray,(256,256))
+        satellite_image_tensor = frame2tensor(satellite_gray)
+
+        batch = {'image0': uav_image_tensor, 'image1': satellite_image_tensor}
 
         # Inference
         with torch.no_grad():
-            matcher(batch)    # batch = {'image0': img0, 'image1': img1}
+            matcher(batch)
             mkpts0 = batch['mkpts0_f'].cpu().numpy()
             mkpts1 = batch['mkpts1_f'].cpu().numpy()
-        M, mask = cv2.findHomography(mkpts0,mkpts1, cv2.RANSAC, 3)#Homography
+
+        tot = int(mkpts0.shape[0])
+        M, mask = cv2.findHomography(mkpts0, mkpts1, cv2.RANSAC, 3)
 
         # # ==== 시각화: 매칭 시각화 저장 ====
         # # uav_gray / satellite_gray는 이미 256x256으로 리사이즈한 그레이 이미지
@@ -343,78 +284,93 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         # visualize_match(uav_gray, satellite_gray, mkpts0, mkpts1, mask, os.path.join(save_dir, save_name))
         # # ===================================== 
 
-        mkpts0,mkpts1=mkpts0[np.where(mask[:,0]==1)],mkpts1[np.where(mask[:,0]==1)]
+        if M is None or mask is None:
+            inl = 0
+            dist = np.inf
+        else:
+            inl = int(mask.sum())
+            # 중심점 변위
+            img1_dims = np.float32([[128, 128]]).reshape(-1, 1, 2)
+            pt = cv2.perspectiveTransform(img1_dims, M)[0][0]
+            dist = float(np.sqrt(np.sum((pt - np.array([128,128], dtype=np.float32))**2)))
 
-        img1_dims = np.float32([[128, 128]]).reshape(-1, 1, 2)
-        # img2_dims = np.float32([[178, 178]]).reshape(-1, 1, 2)
-        img1_transform = cv2.perspectiveTransform(img1_dims, M)[0][0]
-        # img2_transform = cv2.perspectiveTransform(img2_dims, M)[0][0]
-        distance=eq(img1_transform,[128, 128])#offset
-        local_distance.append(distance)
-    # 거리 오름차순 정렬로 Top-n 후보 선정
-    # order = np.argsort(local_distance)[:top_n]
+        cand_inliers.append(inl)
+        cand_totals.append(tot)
+        cand_dists.append(dist)
+        local_distance.append(dist)
+
     # ===== 관측비용 정규화 =====
     obs = np.array(local_distance, dtype=np.float32)
     finite_mask = np.isfinite(obs)
     if not finite_mask.any():
-        # 전부 실패면 큰 값으로 처리
         obs_norm = np.ones_like(obs, dtype=np.float32)
     else:
-        m = float(np.nanmin(obs[finite_mask]))
-        M = float(np.nanmax(obs[finite_mask]))
+        m = float(np.nanmin(obs[finite_mask])); M = float(np.nanmax(obs[finite_mask]))
         obs_norm = (obs - m) / (M - m + 1e-6)
-        obs_norm[~finite_mask] = 1.0  # 실패는 최악 점수
+        obs_norm[~finite_mask] = 1.0
 
     # ===== 방향성(전이) 패널티 =====
-    # prev_idx: 직전 선택된 실제 인덱스(0-based)
     prev_idx = 0 if uav_index == 0 else last_chosen_idx
-
-    # 하이퍼파라미터 (원하는 방향성 강도에 맞춰 조정)
-    exp_step = 1   # 기대 전진량(보통 1)
-    tol      = 2   # 허용 여유 (±tol 이내는 패널티 작게)
-    alpha    = 0.2 # 과대/과소 점프 패널티 가중치
-    beta     = 0.8 # 역진(backward) 패널티 가중치 (뒤로 가면 크게)
+    exp_step, tol, alpha, beta = 1, 2, 0.2, 0.8
 
     scores = []
     for j, cand_idx in enumerate(local_inds):
-        delta    = int(cand_idx) - int(prev_idx)          # 얼마나 전/후진했는가
-        back_pen = max(0, -delta)                          # 뒤로 가면 양수
-        jump_pen = max(0, abs(delta - exp_step) - tol)     # 기대 step에서 벗어난 점프
+        delta    = int(cand_idx) - int(prev_idx)
+        back_pen = max(0, -delta)
+        jump_pen = max(0, abs(delta - exp_step) - tol)
         trans    = alpha * jump_pen + beta * back_pen
-        score    = float(obs_norm[j]) + float(trans)       # 관측비용 + 방향성 패널티
-        scores.append(score)
+        scores.append(float(obs_norm[j]) + float(trans))
     scores = np.array(scores, dtype=np.float32)
 
     # ===== Top-k 및 최종 선택 =====
     order = np.argsort(scores)[:top_n]
+    top_n_idx    = [int(local_inds[j])       for j in order]
+    top_n_files  = [satellite_images[i]      for i in top_n_idx]
+    top_n_dists  = [float(cand_dists[j])     for j in order]
+    top_n_scores = [float(scores[j])         for j in order]
+    top_n_inl    = [int(cand_inliers[j])     for j in order]
+    top_n_tot    = [int(cand_totals[j])      for j in order]
 
-    # 실제 이미지 인덱스(값)들에서 top-k 뽑기
-    top_n_idx   = [int(local_inds[j])         for j in order] # 값(파일 인덱스)
-    top_n_dists = [float(local_distance[j])   for j in order]
-
-    # 최종 선택
-    chosen_idx = int(local_inds[order[0]])    # 실제 인덱스(값)
+    chosen_idx = int(local_inds[order[0]])
     chosen_fn  = satellite_images[chosen_idx]
 
-    info = f"UAV ID:{uav_index},True ID:{true_id},Global ID:{chosen_idx},file Name:{chosen_fn},Distance:{local_distance[order[0]]}"
+    info = f"UAV ID:{uav_index},True ID:{true_id},Global ID:{chosen_idx},file Name:{chosen_fn},Distance:{top_n_dists[0]}"
     print(info)
-    # Pointer=local_search[pridict_local_id]+1
+
+    # 포인터 업데이트
     pointer_pos = int(np.where(satellite_rank == chosen_idx)[0][0]) + 1
-    pointer_pos = min(pointer_pos, len(satellite_rank) - 1)  # 경계 보호
+    pointer_pos = min(pointer_pos, len(satellite_rank) - 1)
     last_chosen_idx = chosen_idx
     history_predict.append(pointer_pos)
 
+    # 결과 저장용 문자열
     top_n_ids_str   = ";".join(map(str, top_n_idx))
     top_n_dists_str = ";".join(f"{d:.6f}" for d in top_n_dists)
 
     results_info.append([
-        uav_index,
-        true_id,
-        chosen_idx,                       # Predict ID
-        float(local_distance[order[0]]),  # Distance
-        top_n_ids_str,
-        top_n_dists_str
+        uav_index, true_id, chosen_idx, float(top_n_dists[0]),
+        top_n_ids_str, top_n_dists_str
     ])
+
+    # =============== 매칭 패널 저장 ====================
+    uav_bgr = cv2.imread(os.path.join(root_dir, "query_images", uav_path))
+    # GT(1-base라면 -1)
+    try:
+        gt_idx0 = int(true_id)
+    except:
+        gt_idx0 = None
+
+    panel_dir  = "./outputs/topk_panels"
+    panel_name = f"uav{uav_index:04d}_top{top_n}.png"
+    save_topk_panel(
+        root_dir,
+        uav_bgr,
+        top_n_idx, top_n_files,
+        top_n_dists, top_n_scores,
+        top_n_inl, top_n_tot,
+        chosen_idx, gt_idx0,
+        os.path.join(panel_dir, panel_name)
+    )
 
 
 # # Save results
