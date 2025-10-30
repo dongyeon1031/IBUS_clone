@@ -5,12 +5,13 @@ import torch
 import numpy as np
 import cv2
 import os
-from visualization import save_topk_panel, visualize_match
+from visualization import *
 from dataset import HelicopterUAV,HelicopterSatellite,BuildTransforms
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from models import build_model
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 from sklearn.manifold import Isomap
 from PIL import Image
 import argparse
@@ -27,14 +28,16 @@ args = parser.parse_args()
 # -----------------------------
 # root_dir="./data/round2/Val"
 # root_dir="./data/NewYorkFly/Val"
-root_dir="./data/jeju"
+# root_dir="./data/jeju"
+root_dir="./data/jeju_non_seq_sparse"
+# root_dir="./data/jeju_non_seq"
 # root_dir="./data/daegu"
 uav_images = sorted(os.listdir(os.path.join(root_dir, "query_images")))
 satellite_images = sorted(os.listdir(os.path.join(root_dir, "reference_images/offset_0_None")))
 gt = np.loadtxt(os.path.join(root_dir, "gt_matches.csv"), delimiter=',', dtype=str)[1:, :]
 
 # -----------------------------
-# 3) 서브셋 적용 (255~522 포함)
+# 3) 서브셋 적용
 # -----------------------------
 if args.sub_start is not None and args.sub_end is not None:
     ss = max(0, args.sub_start)
@@ -166,26 +169,38 @@ print("embedding min/max:", float(emb.min()), float(emb.max()))
 print("rank head:", rank[:10])
 
 # ====================== 정렬 순서 시각화 ======================
+x = np.arange(len(emb))
+y = emb
+
 plt.figure(figsize=(6, 4))
-plt.scatter(np.arange(len(emb)), emb,
-            c=np.arange(len(emb)), cmap='plasma', s=6)
+plt.scatter(x, y, c=x, cmap='plasma', s=6)
 plt.title("Isomap Embedding vs Original Index")
 plt.xlabel("Original Image Index")
 plt.ylabel("Isomap 1D Embedding Value")
 plt.colorbar(label="Image index (color = order)")
-plt.tight_layout()
-plt.savefig("./outputs/isomap_scatter.png", dpi=200)
-plt.close()
-print("✅ Saved: ./outputs/isomap_scatter.png")
 
+# --- 인덱스 라벨만 작게 표시 ---
+# 너무 빽빽하면 step 값을 늘려 복잡도 줄이기
+step = max(1, len(emb) // 80)   # 대략 80개 라벨만 찍도록 샘플링
+for i in range(0, len(emb), step):
+    plt.text(
+        x[i], y[i], str(i),
+        fontsize=5, color='white', ha='center', va='bottom', alpha=0.95,
+        path_effects=[pe.withStroke(linewidth=1.2, foreground='black')]  # 가독성 테두리
+    )
+
+plt.tight_layout()
+plt.savefig("./outputs/isomap_scatter_labeled.png", dpi=200)
+plt.close()
+print("✅ Saved: ./outputs/isomap_scatter_labeled.png")
 
 # ===================== 랭크 강제 정렬 =====================
-# satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
-satellite_rank = np.arange(len(satellite_images), dtype=int)
+satellite_rank=np.argsort(satellite_result[:,0])#Satellite sort result
+# satellite_rank = np.arange(len(satellite_images), dtype=int)
 
 # print("rank: ",satellite_rank)
 np.savetxt("./outputs/rank_debug.txt", satellite_rank, fmt="%d")
-satellite_images = np.array(satellite_images)[satellite_rank]
+satellite_images = np.array(satellite_images)#[satellite_rank]
 # print("image index: ",satellite_images)
 
 
@@ -211,7 +226,6 @@ print("Sorting error:",np.mean(abs(erro)))
 
 # # Image matching
 # LoFTR
-
 from match.src.loftr import LoFTR, default_cfg
 
 #https://github.com/zju3dv/LoFTR
@@ -319,7 +333,9 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         back_pen = max(0, -delta)
         jump_pen = max(0, abs(delta - exp_step) - tol)
         trans    = alpha * jump_pen + beta * back_pen
-        scores.append(float(obs_norm[j]) + float(trans))
+        # =================== 패널티 항 더해주기 ===================
+        # scores.append(float(obs_norm[j]) + float(trans))
+        scores.append(float(obs_norm[j]))
     scores = np.array(scores, dtype=np.float32)
 
     # ===== Top-k 및 최종 선택 =====
@@ -352,26 +368,31 @@ for uav_index in range(len(uav_images)):#对于每个无人机图像
         top_n_ids_str, top_n_dists_str
     ])
 
-    # =============== 매칭 패널 저장 ====================
-    uav_bgr = cv2.imread(os.path.join(root_dir, "query_images", uav_path))
-    # GT(1-base라면 -1)
-    try:
-        gt_idx0 = int(true_id)
-    except:
-        gt_idx0 = None
+    # # =============== 매칭 패널 저장 ====================
+    # uav_bgr = cv2.imread(os.path.join(root_dir, "query_images", uav_path))
+    # # GT(1-base라면 -1)
+    # try:
+    #     gt_idx0 = int(true_id)
+    # except:
+    #     gt_idx0 = None
 
-    panel_dir  = "./outputs/topk_panels"
-    panel_name = f"uav{uav_index:04d}_top{top_n}.png"
-    save_topk_panel(
-        root_dir,
-        uav_bgr,
-        top_n_idx, top_n_files,
-        top_n_dists, top_n_scores,
-        top_n_inl, top_n_tot,
-        chosen_idx, gt_idx0,
-        os.path.join(panel_dir, panel_name)
-    )
+    # panel_dir  = "./outputs/topk_panels"
+    # panel_name = f"uav{uav_index:04d}_top{top_n}.png"
+    # save_topk_panel(
+    #     root_dir,
+    #     uav_bgr,
+    #     top_n_idx, top_n_files,
+    #     top_n_dists, top_n_scores,
+    #     top_n_inl, top_n_tot,
+    #     chosen_idx, gt_idx0,
+    #     os.path.join(panel_dir, panel_name)
+    # )
 
+    # =============== 매칭 permitation plot을 그림 ====================
+    # results_info: [uav_id, true_id, pred_id, dist, top5_ids, top5_dists]
+    true_seq = [int(r[1]) for r in results_info]   # 0-base 가정
+    pred_seq = [int(r[2]) for r in results_info]
+    plot_permutation(true_seq, pred_seq, "./outputs/plot/perm_plot.png")
 
 # # Save results
 results_dir = "./outputs"

@@ -1,6 +1,47 @@
 import cv2
 import os
 import numpy as np
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import defaultdict
+
+def kendall_tau_slow(true_idx, pred_idx):
+    '''
+    Permutation Plot
+    - x(실제 인덱스)와 y(예측 인덱스)를 y=x 그래프를 기준으로 벗어난 정도를 통해 예측 오차를 확인하는 그래프를 그림
+    '''
+    # n이 수천이면 O(n^2)도 충분. 더 크면 scipy.stats.kendalltau 쓰면 됨.
+    n = len(true_idx)
+    inv = 0
+    for i in range(n):
+        for j in range(i+1, n):
+            a = true_idx[i] - true_idx[j]
+            b = pred_idx[i] - pred_idx[j]
+            if a*b < 0:
+                inv += 1
+    total = n*(n-1)//2
+    tau = 1 - 2*inv/total if total>0 else 1.0
+    return tau
+
+def plot_permutation(true_idx, pred_idx, save_path):
+    true_idx = np.asarray(true_idx, dtype=int)
+    pred_idx = np.asarray(pred_idx, dtype=int)
+
+    plt.figure(figsize=(6,6))
+    sc = plt.scatter(true_idx, pred_idx, c=np.arange(len(true_idx)), s=8, cmap='viridis')
+    mx = max(true_idx.max(), pred_idx.max()) + 1
+    plt.plot([0, mx], [0, mx], 'r--', linewidth=1, label='y=x')
+    tau = kendall_tau_slow(true_idx, pred_idx)
+    plt.title(f'Permutation Plot  (Kendall τ={tau:.3f})')
+    plt.xlabel('True index')
+    plt.ylabel('Predicted index')
+    plt.colorbar(sc, label='frame order')
+    plt.legend(loc='lower right')
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+
 
 # ===== Top-k 후보 요약 패널 저장 =====
 def save_topk_panel(root_dir,
@@ -42,8 +83,8 @@ def save_topk_panel(root_dir,
         sat_bgr = cv2.resize(sat_bgr, (tile_size, tile_size))
 
         # 텍스트 오버레이
-        label1 = f"ID:{idx}  sc:{sc:.3f}"
-        label2 = f"dist:{dist:.2f}  inl:{inl}/{tot}"
+        label1 = f"ID:{idx}  score:{sc:.3f}"
+        label2 = f"dist:{dist:.2f}  n_inl:{inl}/{tot}"
         cv2.putText(sat_bgr, label1, (10, 24), font, 0.55, (0,0,0), 3, cv2.LINE_AA)
         cv2.putText(sat_bgr, label1, (10, 24), font, 0.55, (255,255,255), 2, cv2.LINE_AA)
         cv2.putText(sat_bgr, label2, (10, 48), font, 0.55, (0,0,0), 3, cv2.LINE_AA)
